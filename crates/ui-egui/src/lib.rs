@@ -313,8 +313,9 @@ pub struct FilmcraftApp {
     last_ui_time: f64,
     pub(crate) synthetic: Vec<egui::Event>,
     /// Edit-menu commands from the native menu bar turned into the text events they stand for,
-    /// for the next frame while text is being edited (#1953).
-    menu_text_events: Vec<egui::Event>,
+    /// for the next frame while text is being edited (#1953), each with the widget it is for:
+    /// it is dropped if the keyboard focus has moved on by then. `None` goes to whoever has it.
+    menu_text_events: Vec<(egui::Event, Option<egui::Id>)>,
     /// macOS: a Control+Click already translated to a secondary (context) click, so its release is
     /// translated too even if Control is let go mid-click. AppKit delivers Control+Click to the
     /// view as a *primary* press with the Control modifier (`rightMouseDown:` only fires for a
@@ -1512,6 +1513,10 @@ impl FilmcraftApp {
         if !graphic_text && !text_field {
             return false;
         }
+        let focused = ctx.memory(|m| m.focused());
+        let graphic = egui::Id::new(panels::graphics::TEXT_EDIT_ID);
+        // the field being typed in, else the graphic's text
+        let target = if text_field { focused } else { Some(graphic) };
         let key = |key, modifiers| egui::Event::Key { key, physical_key: Some(key), pressed: true, repeat: false, modifiers };
         let event = match id {
             "edit.copy" => egui::Event::Copy,
@@ -1527,7 +1532,12 @@ impl FilmcraftApp {
             "edit.redo" if text_field => key(egui::Key::Z, egui::Modifiers::COMMAND | egui::Modifiers::SHIFT),
             _ => return false,
         };
-        self.menu_text_events.push(event);
+        // a graphic's text gives the keyboard to any other focused widget (a button in Text
+        // Properties) and takes it back once nothing has it: free it, so the event reaches the text
+        if !text_field && let Some(other) = focused.filter(|f| *f != graphic) {
+            ctx.memory_mut(|m| m.surrender_focus(other));
+        }
+        self.menu_text_events.push((event, target));
         ctx.request_repaint();
         true
     }
@@ -2117,13 +2127,17 @@ fn synthesize_mac_ctrl_click(armed: &mut bool, raw_input: &mut egui::RawInput) {
 }
 
 impl eframe::App for FilmcraftApp {
-    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
         self.native_window_focused = Some(raw_input.focused);
         #[cfg(target_os = "macos")]
         if !self.control_input_only {
             synthesize_mac_ctrl_click(&mut self.mac_ctrl_click_armed, raw_input);
         }
-        raw_input.events.append(&mut self.menu_text_events);
+        // an edit for a field that lost the keyboard meanwhile (a click on another field in the
+        // same frame) is dropped rather than applied to the new one; the graphic's text takes the
+        // keyboard back this frame when nothing has it
+        let focused = ctx.memory(|m| m.focused());
+        raw_input.events.extend(self.menu_text_events.drain(..).filter(|(_, target)| menu_text_event_wanted(*target, focused)).map(|(event, _)| event));
         if self.control_input_only {
             // Preserve screenshot responses and all viewport lifecycle/geometry metadata.
             raw_input.events.retain(|event| matches!(event, egui::Event::Screenshot { .. }));
@@ -2863,6 +2877,34 @@ mod voiceover_playback_tests {
         assert!(app.session.playhead() > from, "{:?} <= {from:?}", app.session.playhead());
         app.session.execute("audio.voiceover.stop", json!({"discard": true})).unwrap();
         app.stop();
+    }
+}
+
+/// Whether a queued native Edit event for `target` still goes in, with `focused` holding the
+/// keyboard now: unbound events always do; a field's only while it keeps the keyboard; the
+/// graphic's text also when nothing has the keyboard, as it takes it back in this frame.
+fn menu_text_event_wanted(target: Option<egui::Id>, focused: Option<egui::Id>) -> bool {
+    let graphic = egui::Id::new(panels::graphics::TEXT_EDIT_ID);
+    target.is_none() || target == focused || (target == Some(graphic) && focused.is_none())
+}
+
+#[cfg(test)]
+mod menu_text_event_tests {
+    use super::menu_text_event_wanted;
+
+    /// CodeRabbit on #2081: an edit for field A is dropped once a click gave B the keyboard, rather
+    /// than pasted into B; the graphic's text gets its edit when it is about to take the keyboard back.
+    #[test]
+    fn a_queued_edit_follows_only_its_own_field() {
+        let (a, b) = (egui::Id::new("a"), egui::Id::new("b"));
+        let graphic = egui::Id::new(crate::panels::graphics::TEXT_EDIT_ID);
+        assert!(menu_text_event_wanted(Some(a), Some(a)));
+        assert!(!menu_text_event_wanted(Some(a), Some(b)), "B has the keyboard now");
+        assert!(!menu_text_event_wanted(Some(a), None));
+        assert!(menu_text_event_wanted(Some(graphic), None), "the graphic's text takes the keyboard back");
+        assert!(menu_text_event_wanted(Some(graphic), Some(graphic)));
+        assert!(!menu_text_event_wanted(Some(graphic), Some(b)));
+        assert!(menu_text_event_wanted(None, Some(b)), "a recorder key press goes to whoever has the keyboard");
     }
 }
 
