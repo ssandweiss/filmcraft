@@ -1974,6 +1974,8 @@ fn marquee_clips(seq: &Sequence, layout: &Layout, r: Rect) -> Vec<ClipId> {
 fn drag_is_locked(session: &filmcraft_engine::Session, seq: &Sequence, drag: &Drag) -> bool {
     let clips = match drag {
         Drag::Move { clips, track_delta, .. } => return move_is_locked(seq, clips, *track_delta),
+        // an Option-trim edits this clip alone, so a linked partner on a locked track does not block it
+        Drag::Trim { clip, linked: false, .. } => return move_is_locked(seq, &[*clip], 0),
         Drag::Trim { clip, .. } | Drag::Stretch { clip, .. } | Drag::Remix { clip, .. } | Drag::Slip { clip, .. } | Drag::Slide { clip, .. } => vec![*clip],
         Drag::Roll { left, right, .. } => vec![*left, *right],
         Drag::Transition { id, .. } => return seq.all_tracks().any(|t| t.locked && t.transitions.iter().any(|tr| tr.id == *id)),
@@ -3130,6 +3132,34 @@ fn interact(app: &mut FilmcraftApp, ui: &mut egui::Ui, seq: &Sequence, layout: &
 /// #374: trimming an audio clip must cut its waveform off at the moving edge, not squeeze the whole
 /// waveform into the shorter clip: the preview draws from the item the trim will leave, which shows
 /// the same media at every timeline time it still covers.
+#[cfg(test)]
+mod drag_lock_tests {
+    use super::*;
+
+    /// CodeRabbit on #2009: with the sound's track locked, an Option-trim of its picture (which
+    /// leaves the sound alone) is allowed; a linked trim, which would trim the sound, is not.
+    #[test]
+    fn an_unlinked_trim_ignores_a_locked_partner() {
+        let mut s = filmcraft_engine::Session::default();
+        s.execute("file.openDemoProject", serde_json::json!({})).unwrap();
+        let q = s.active_sequence().unwrap();
+        let picture = q.video_tracks[0].items.iter().find(|c| c.link.is_some()).unwrap().clone();
+        let sound_track = q.audio_tracks.iter().find(|t| t.items.iter().any(|a| a.link == picture.link)).unwrap().id;
+        s.execute("timeline.setTrack", serde_json::json!({"track": sound_track.0, "locked": true})).unwrap();
+        let seq = s.active_sequence().unwrap().clone();
+        let trim = |linked| Drag::Trim {
+            clip: picture.id,
+            edge: filmcraft_edit::Edge::Out,
+            mode: filmcraft_edit::TrimMode::Regular,
+            delta: Tick::ZERO,
+            from: Tick::ZERO,
+            linked,
+        };
+        assert!(!drag_is_locked(&s, &seq, &trim(false)), "the picture alone is on an unlocked track");
+        assert!(drag_is_locked(&s, &seq, &trim(true)), "a linked trim would trim the locked sound");
+    }
+}
+
 #[cfg(test)]
 mod trim_preview_tests {
     use super::*;
