@@ -1535,11 +1535,25 @@ impl FilmcraftApp {
     /// Sends the menu tree to the native menu bar when it changed, so its items show the same
     /// labels, shortcuts and enablement as the in-window menus (Undo with nothing to undo is
     /// disabled). Without a native menu bar this does nothing.
-    fn sync_native_menu(&mut self) {
+    ///
+    /// While text is being edited the Edit items [`Self::edit_menu_to_text`] routes stay enabled,
+    /// whatever the project state: AppKit does not send a disabled item's command, so with no clip
+    /// selected ⌘C would never reach the text field. `text_field` is a focused text field (Copy,
+    /// Cut, Paste, Select All, Undo, Redo), `graphic_text` a graphic's text being edited (Copy,
+    /// Cut, Paste, and Select All, which `menus::invoke` applies to the text).
+    fn sync_native_menu(&mut self, text_field: bool, graphic_text: bool) {
         if self.hooks.menu_changed.is_none() {
             return;
         }
-        let items = menus::menu_items(self);
+        let mut items = menus::menu_items(self);
+        for it in &mut items {
+            let text_command = match it.id.as_str() {
+                "edit.copy" | "edit.cut" | "edit.paste" | "edit.selectAll" => text_field || graphic_text,
+                "edit.undo" | "edit.redo" => text_field,
+                _ => false,
+            };
+            it.enabled |= text_command;
+        }
         if items == self.menu_sent {
             return;
         }
@@ -1871,7 +1885,7 @@ impl FilmcraftApp {
         }
         self.begin_press(&ctx);
         self.handle_shortcuts(&ctx);
-        self.sync_native_menu();
+        self.sync_native_menu(ctx.text_edit_focused(), self.ui.gfx_edit.is_some());
         self.advance_playback(&ctx);
         self.advance_source_playback(&ctx);
         self.scrub_audio(&ctx);
@@ -2899,23 +2913,49 @@ mod native_menu_tests {
         let sink = sent.clone();
         app.hooks.menu_changed = Some(Box::new(move |items: &[menus::MenuItem]| sink.borrow_mut().push(items.to_vec())));
 
-        app.sync_native_menu();
+        app.sync_native_menu(false, false);
         let last = |sent: &Rc<RefCell<Vec<Vec<menus::MenuItem>>>>, id: &str| sent.borrow().last().and_then(|items| enabled(items, id));
         assert_eq!(last(&sent, "edit.undo"), Some(false), "nothing to undo in an empty project");
         assert_eq!(last(&sent, "edit.redo"), Some(false), "nothing to redo in an empty project");
         assert_eq!(last(&sent, "file.newProject"), Some(true));
 
-        app.sync_native_menu();
+        app.sync_native_menu(false, false);
         assert_eq!(sent.borrow().len(), 1, "an unchanged menu is not sent again");
 
         app.session.execute("file.newSequence", json!({"width":16,"height":16})).unwrap();
-        app.sync_native_menu();
+        app.sync_native_menu(false, false);
         assert_eq!(last(&sent, "edit.undo"), Some(true), "an edit can be undone");
         assert_eq!(last(&sent, "edit.redo"), Some(false));
 
         app.session.execute("edit.undo", json!({})).unwrap();
-        app.sync_native_menu();
+        app.sync_native_menu(false, false);
         assert_eq!(last(&sent, "edit.undo"), Some(false));
         assert_eq!(last(&sent, "edit.redo"), Some(true), "the undone edit can be redone");
+    }
+
+    /// #1953 (CodeRabbit on #2010): with nothing selected, nothing to undo and no clips copied,
+    /// the native Edit items are disabled and AppKit would never send ⌘C / ⌘V / ⌘Z to a focused
+    /// text field. While text is being edited they stay enabled.
+    #[test]
+    fn native_edit_items_stay_enabled_while_text_is_edited() {
+        let sent: Rc<RefCell<Vec<Vec<menus::MenuItem>>>> = Rc::default();
+        let mut app = FilmcraftApp::new(Session::default());
+        let sink = sent.clone();
+        app.hooks.menu_changed = Some(Box::new(move |items: &[menus::MenuItem]| sink.borrow_mut().push(items.to_vec())));
+        let ids = ["edit.copy", "edit.cut", "edit.paste", "edit.undo", "edit.redo"];
+        let last = |sent: &Rc<RefCell<Vec<Vec<menus::MenuItem>>>>, id: &str| sent.borrow().last().and_then(|items| enabled(items, id));
+        app.sync_native_menu(false, false);
+        for id in ids {
+            assert_eq!(last(&sent, id), Some(false), "{id} with no text being edited");
+        }
+        app.sync_native_menu(true, false);
+        for id in ids {
+            assert_eq!(last(&sent, id), Some(true), "{id} in a text field");
+        }
+        // a graphic's text: the clipboard commands, not the project's Undo and Redo
+        app.sync_native_menu(false, true);
+        assert_eq!(last(&sent, "edit.copy"), Some(true));
+        assert_eq!(last(&sent, "edit.paste"), Some(true));
+        assert_eq!(last(&sent, "edit.undo"), Some(false));
     }
 }
