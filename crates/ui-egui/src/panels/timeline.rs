@@ -3143,8 +3143,8 @@ mod drag_lock_tests {
         let mut s = filmcraft_engine::Session::default();
         s.execute("file.openDemoProject", serde_json::json!({})).unwrap();
         let q = s.active_sequence().unwrap();
-        let picture = q.video_tracks[0].items.iter().find(|c| c.link.is_some()).unwrap().clone();
-        let sound_track = q.audio_tracks.iter().find(|t| t.items.iter().any(|a| a.link == picture.link)).unwrap().id;
+        let picture = q.video_tracks[0].items.iter().find(|c| c.link.is_some()).expect("the demo has a linked picture on V1").clone();
+        let sound_track = q.audio_tracks.iter().find(|t| t.items.iter().any(|a| a.link == picture.link)).expect("the demo picture's linked sound").id;
         s.execute("timeline.setTrack", serde_json::json!({"track": sound_track.0, "locked": true})).unwrap();
         let seq = s.active_sequence().unwrap().clone();
         let trim = |linked| Drag::Trim {
