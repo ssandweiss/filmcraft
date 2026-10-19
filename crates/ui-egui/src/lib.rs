@@ -1506,19 +1506,25 @@ impl FilmcraftApp {
     /// them, so with the Keyboard Shortcuts dialog open a chord such as ⌘B arrives as its menu
     /// command (New Bin) instead of a key press: it ran the command and the recorder never saw the
     /// chord (#1333). While a shortcut is being recorded, the command becomes the key press of its
-    /// shortcut for the recorder; otherwise the dialog keeps it from running, as it does for the
-    /// in-app shortcuts. Returns whether `id` was taken.
+    /// shortcut for the recorder. Otherwise the Edit menu's text commands go to the dialog's
+    /// search field when it has focus ([`Self::edit_menu_to_text`]), Quit still quits, and other
+    /// commands are kept from running, as the in-app shortcuts are. Returns whether `id` was taken.
     fn menu_command_in_shortcut_editor(&mut self, ctx: &egui::Context, id: &str) -> bool {
         if self.dialog != Some(Dialog::Shortcuts) {
             return false;
         }
-        let chord = self.session.shortcuts.primary(id).as_deref().and_then(menus::parse_shortcut);
-        if self.shortcut_editor.recording.is_some()
-            && let Some((modifiers, key)) = chord
-        {
-            self.menu_text_events.push((egui::Event::Key { key, physical_key: Some(key), pressed: true, repeat: false, modifiers }, None));
-            ctx.request_repaint();
+        if self.shortcut_editor.recording.is_some() {
+            if let Some((modifiers, key)) = self.session.shortcuts.primary(id).as_deref().and_then(menus::parse_shortcut) {
+                self.menu_text_events.push((egui::Event::Key { key, physical_key: Some(key), pressed: true, repeat: false, modifiers }, None));
+                ctx.request_repaint();
+            }
+            return true;
         }
+        if id == "app.quit" {
+            return false;
+        }
+        // taken by the focused field, or dropped
+        self.edit_menu_to_text(ctx, id);
         true
     }
 

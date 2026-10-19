@@ -508,3 +508,28 @@ fn native_menu_chords_are_recorded_in_the_shortcut_editor() {
     d.frames(3);
     assert!(std::sync::Arc::ptr_eq(&project, &d.app().session.project), "the dialog keeps menu shortcuts from running");
 }
+
+/// Review on #2081: with Keyboard Shortcuts open and nothing being recorded, the Edit menu's ⌘V,
+/// ⌘A and ⌘X still edit the dialog's focused search field, and clips are not pasted behind it.
+#[test]
+fn native_edit_menu_edits_the_shortcut_editor_search() {
+    let mut d = Driver::new();
+    let (tx, rx) = channel();
+    d.app().command_inbox = Some(rx);
+    d.app().hooks.clipboard_text = Some(Box::new(|| Some("Razor".to_string())));
+    d.ok("ui.menu.invoke", json!({"id": "app.keyboardShortcuts"}));
+    d.frames(4);
+    d.ok("ui.click", json!({"id": "shortcuts.search"}));
+    d.frames(2);
+    let project = d.app().session.project.clone();
+    tx.send("edit.paste".to_string()).unwrap();
+    d.frames(3);
+    assert_eq!(d.app().shortcut_editor.search, "Razor", "Paste goes into the search field");
+    tx.send("edit.selectAll".to_string()).unwrap();
+    d.frames(2);
+    tx.send("edit.cut".to_string()).unwrap();
+    d.frames(3);
+    assert_eq!(d.app().shortcut_editor.search, "", "Select All, then Cut empties the field");
+    assert_eq!(d.app().shortcut_editor.recording, None);
+    assert!(std::sync::Arc::ptr_eq(&project, &d.app().session.project), "no clips were cut or pasted");
+}
