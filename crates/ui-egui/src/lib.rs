@@ -1501,9 +1501,6 @@ impl FilmcraftApp {
 
     // ---------------------------------------------------------------- input
 
-    /// Sends the menu tree to the native menu bar when it changed, so its items show the same
-    /// labels, shortcuts and enablement as the in-window menus (Undo with nothing to undo is
-    /// disabled). Without a native menu bar this does nothing.
     /// The native menu bar (macOS) takes the Edit menu's ⌘C, ⌘X, ⌘V, ⌘A, ⌘Z and ⇧⌘Z before the
     /// window sees them, so they arrive as menu commands. While a text field or a graphic's text
     /// is being edited they belong to the text, as they do on Windows and Linux: this queues the
@@ -1535,6 +1532,9 @@ impl FilmcraftApp {
         true
     }
 
+    /// Sends the menu tree to the native menu bar when it changed, so its items show the same
+    /// labels, shortcuts and enablement as the in-window menus (Undo with nothing to undo is
+    /// disabled). Without a native menu bar this does nothing.
     fn sync_native_menu(&mut self) {
         if self.hooks.menu_changed.is_none() {
             return;
