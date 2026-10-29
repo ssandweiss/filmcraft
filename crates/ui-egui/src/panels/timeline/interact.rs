@@ -384,7 +384,8 @@ fn start_drag(app: &mut FilmcraftApp, ctx: &egui::Context, resp: &egui::Response
                 let r = if mods.shift {
                     app.session.execute("timeline.razor", json!({"time": tt.0}))
                 } else {
-                    app.session.execute("timeline.razor", json!({"time": tt.0, "clip": clip.0}))
+                    // Option-click cuts the clicked clip alone, not its linked partners (#1945)
+                    app.session.execute("timeline.razor", json!({"time": tt.0, "clip": clip.0, "linked": !mods.alt}))
                 };
                 if let Err(e) = r {
                     app.ui.status = e.to_string();
